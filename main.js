@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Tray, Menu, session, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu, session, shell, screen } = require('electron');
 const path = require('path');
 const Store = require('electron-store');
 const { fetchViaWindow } = require('./src/fetch-via-window');
@@ -21,6 +21,8 @@ let tray = null;
 
 const WIDGET_WIDTH = 530;
 const WIDGET_HEIGHT = 155;
+const TINY_WIDTH = 230;
+const TINY_HEIGHT = 38;
 
 // Set session-level User-Agent to avoid Electron detection
 app.on('ready', () => {
@@ -42,10 +44,25 @@ async function setSessionCookie(sessionKey) {
 }
 
 function createMainWindow() {
+  const mode = store.get('settings.widgetMode', 'tiny');
+  const isTiny = mode === 'tiny';
   const savedPosition = store.get('windowPosition');
+
+  // Default position: bottom-right of primary display
+  let defaultX, defaultY;
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const { width: screenW, height: screenH } = primaryDisplay.workAreaSize;
+  if (isTiny) {
+    defaultX = screenW - TINY_WIDTH - 20;
+    defaultY = screenH - TINY_HEIGHT - 60;
+  } else {
+    defaultX = screenW - WIDGET_WIDTH - 20;
+    defaultY = screenH - WIDGET_HEIGHT - 60;
+  }
+
   const windowOptions = {
-    width: WIDGET_WIDTH,
-    height: WIDGET_HEIGHT,
+    width: isTiny ? TINY_WIDTH : WIDGET_WIDTH,
+    height: isTiny ? TINY_HEIGHT : WIDGET_HEIGHT,
     frame: false,
     transparent: true,
     alwaysOnTop: true,
@@ -59,17 +76,46 @@ function createMainWindow() {
     }
   };
 
-  if (savedPosition) {
+  // Use saved position, but reset if it's too close to the bottom edge
+  // (fixes overlap from previous 20px offset)
+  if (savedPosition && savedPosition.y < screenH - 80) {
     windowOptions.x = savedPosition.x;
     windowOptions.y = savedPosition.y;
+  } else {
+    windowOptions.x = defaultX;
+    windowOptions.y = defaultY;
+    store.delete('windowPosition');
   }
 
   mainWindow = new BrowserWindow(windowOptions);
   mainWindow.loadFile('src/renderer/index.html');
 
   mainWindow.on('move', () => {
-    const position = mainWindow.getBounds();
-    store.set('windowPosition', { x: position.x, y: position.y });
+    const bounds = mainWindow.getBounds();
+    const display = screen.getDisplayMatching(bounds);
+    const workArea = display.workArea;
+
+    // Clamp so the window stays fully within the work area
+    let clamped = false;
+    let x = bounds.x;
+    let y = bounds.y;
+
+    if (x < workArea.x) { x = workArea.x; clamped = true; }
+    if (y < workArea.y) { y = workArea.y; clamped = true; }
+    if (x + bounds.width > workArea.x + workArea.width) {
+      x = workArea.x + workArea.width - bounds.width;
+      clamped = true;
+    }
+    if (y + bounds.height > workArea.y + workArea.height) {
+      y = workArea.y + workArea.height - bounds.height;
+      clamped = true;
+    }
+
+    if (clamped) {
+      mainWindow.setPosition(x, y);
+    }
+
+    store.set('windowPosition', { x, y });
   });
 
   mainWindow.on('closed', () => {
@@ -101,6 +147,23 @@ function createTray() {
         click: () => {
           if (mainWindow) {
             mainWindow.webContents.send('refresh-usage');
+          }
+        }
+      },
+      {
+        label: 'Toggle Size',
+        click: () => {
+          if (mainWindow) {
+            const current = store.get('settings.widgetMode', 'tiny');
+            const newMode = current === 'tiny' ? 'full' : 'tiny';
+            store.set('settings.widgetMode', newMode);
+            if (newMode === 'tiny') {
+              mainWindow.setContentSize(TINY_WIDTH, TINY_HEIGHT);
+            } else {
+              mainWindow.setContentSize(WIDGET_WIDTH, WIDGET_HEIGHT);
+            }
+            clampToScreen();
+            mainWindow.webContents.send('mode-changed', newMode);
           }
         }
       },
@@ -221,7 +284,11 @@ ipcMain.on('close-window', () => {
 
 ipcMain.on('resize-window', (event, height) => {
   if (mainWindow) {
-    mainWindow.setContentSize(WIDGET_WIDTH, height);
+    const mode = store.get('settings.widgetMode', 'tiny');
+    if (mode === 'full') {
+      mainWindow.setContentSize(WIDGET_WIDTH, height);
+      clampToScreen();
+    }
   }
 });
 
@@ -242,6 +309,92 @@ ipcMain.handle('set-window-position', (event, { x, y }) => {
 
 ipcMain.on('open-external', (event, url) => {
   shell.openExternal(url);
+});
+
+// Clamp window position to stay within the display work area
+function clampToScreen() {
+  if (!mainWindow) return;
+  const bounds = mainWindow.getBounds();
+  const display = screen.getDisplayMatching(bounds);
+  const workArea = display.workArea;
+
+  let x = bounds.x;
+  let y = bounds.y;
+
+  if (x < workArea.x) x = workArea.x;
+  if (y < workArea.y) y = workArea.y;
+  if (x + bounds.width > workArea.x + workArea.width) {
+    x = workArea.x + workArea.width - bounds.width;
+  }
+  if (y + bounds.height > workArea.y + workArea.height) {
+    y = workArea.y + workArea.height - bounds.height;
+  }
+
+  if (x !== bounds.x || y !== bounds.y) {
+    mainWindow.setPosition(x, y);
+  }
+}
+
+// Widget mode toggle
+ipcMain.handle('toggle-widget-mode', () => {
+  const current = store.get('settings.widgetMode', 'tiny');
+  const newMode = current === 'tiny' ? 'full' : 'tiny';
+  store.set('settings.widgetMode', newMode);
+
+  if (mainWindow) {
+    if (newMode === 'tiny') {
+      mainWindow.setContentSize(TINY_WIDTH, TINY_HEIGHT);
+    } else {
+      mainWindow.setContentSize(WIDGET_WIDTH, WIDGET_HEIGHT);
+    }
+    // Re-clamp after resize in case expanding pushes off-screen
+    clampToScreen();
+    mainWindow.webContents.send('mode-changed', newMode);
+  }
+  return newMode;
+});
+
+ipcMain.handle('get-widget-mode', () => {
+  return store.get('settings.widgetMode', 'tiny');
+});
+
+// Tiny view right-click context menu
+ipcMain.on('show-tiny-context-menu', () => {
+  if (!mainWindow) return;
+  const template = [
+    {
+      label: 'Refresh',
+      click: () => { mainWindow.webContents.send('refresh-usage'); }
+    },
+    {
+      label: 'Expand',
+      click: () => {
+        store.set('settings.widgetMode', 'full');
+        mainWindow.setContentSize(WIDGET_WIDTH, WIDGET_HEIGHT);
+        clampToScreen();
+        mainWindow.webContents.send('mode-changed', 'full');
+      }
+    },
+    { type: 'separator' },
+    {
+      label: 'Settings',
+      click: () => {
+        // Switch to full mode first, then open settings
+        store.set('settings.widgetMode', 'full');
+        mainWindow.setContentSize(WIDGET_WIDTH, WIDGET_HEIGHT);
+        clampToScreen();
+        mainWindow.webContents.send('mode-changed', 'full');
+        mainWindow.webContents.send('open-settings');
+      }
+    },
+    { type: 'separator' },
+    {
+      label: 'Exit',
+      click: () => { app.quit(); }
+    }
+  ];
+  const menu = Menu.buildFromTemplate(template);
+  menu.popup({ window: mainWindow });
 });
 
 // Settings handlers

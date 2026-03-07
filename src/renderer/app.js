@@ -4,6 +4,7 @@ let updateInterval = null;
 let countdownInterval = null;
 let latestUsageData = null;
 let isExpanded = false;
+let widgetMode = 'tiny'; // 'tiny' or 'full'
 const UPDATE_INTERVAL = 5 * 60 * 1000; // 5 minutes
 const WIDGET_HEIGHT_COLLAPSED = 155;
 const WIDGET_ROW_HEIGHT = 30;
@@ -53,11 +54,19 @@ const elements = {
     expandSection: document.getElementById('expandSection'),
     extraRows: document.getElementById('extraRows'),
 
+    // Tiny view elements
+    tinyView: document.getElementById('tinyView'),
+    tinyPct: document.getElementById('tinyPct'),
+    tinyBarFill: document.getElementById('tinyBarFill'),
+    tinyTime: document.getElementById('tinyTime'),
+    tinyWeeklyCircle: document.getElementById('tinyWeeklyCircle'),
+    tinyExpandBtn: document.getElementById('tinyExpandBtn'),
+    collapseBtn: document.getElementById('collapseBtn'),
+
     settingsBtn: document.getElementById('settingsBtn'),
     settingsOverlay: document.getElementById('settingsOverlay'),
     closeSettingsBtn: document.getElementById('closeSettingsBtn'),
     logoutBtn: document.getElementById('logoutBtn'),
-    coffeeBtn: document.getElementById('coffeeBtn'),
     autoStartToggle: document.getElementById('autoStartToggle'),
     minimizeToTrayToggle: document.getElementById('minimizeToTrayToggle'),
     alwaysOnTopToggle: document.getElementById('alwaysOnTopToggle'),
@@ -79,6 +88,10 @@ async function init() {
     }
     warnThreshold = settings.warnThreshold;
     dangerThreshold = settings.dangerThreshold;
+
+    // Apply saved widget mode
+    widgetMode = await window.electronAPI.getWidgetMode();
+    applyMode(widgetMode);
 
     if (credentials.sessionKey && credentials.organizationId) {
         showMainContent();
@@ -163,10 +176,6 @@ function setupEventListeners() {
         showLoginRequired();
     });
 
-    elements.coffeeBtn.addEventListener('click', () => {
-        window.electronAPI.openExternal('https://paypal.me/SlavomirDurej?country.x=GB&locale.x=en_GB');
-    });
-
     // Theme buttons
     elements.themeBtns.forEach(btn => {
         btn.addEventListener('click', () => {
@@ -186,6 +195,29 @@ function setupEventListeners() {
         debugLog('Session expired event received');
         credentials = { sessionKey: null, organizationId: null };
         showLoginRequired();
+    });
+
+    // Tiny/Full mode toggle
+    elements.tinyExpandBtn.addEventListener('click', () => toggleMode());
+    elements.collapseBtn.addEventListener('click', () => toggleMode());
+
+    // Listen for mode changes from main process (e.g. tray menu)
+    window.electronAPI.onModeChanged((mode) => {
+        widgetMode = mode;
+        applyMode(mode);
+    });
+
+    // Right-click context menu on tiny view
+    elements.tinyView.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        window.electronAPI.showTinyContextMenu();
+    });
+
+    // Open settings from context menu
+    window.electronAPI.onOpenSettings(async () => {
+        await loadSettings();
+        elements.settingsOverlay.style.display = 'flex';
+        window.electronAPI.resizeWindow(260);
     });
 }
 
@@ -210,6 +242,8 @@ async function handleConnect() {
             showMainContent();
             await fetchUsageData();
             startAutoUpdate();
+            // Return to tiny mode after login
+            toggleMode();
         } else {
             elements.sessionKeyError.textContent = result.error || 'Invalid session key';
         }
@@ -247,6 +281,8 @@ async function handleAutoDetect() {
             showMainContent();
             await fetchUsageData();
             startAutoUpdate();
+            // Return to tiny mode after login
+            toggleMode();
         } else {
             elements.autoDetectError.textContent =
                 'Session invalid. Try again or use Manual →';
@@ -421,6 +457,7 @@ function updateUI(data) {
     showMainContent();
     buildExtraRows(data);
     refreshTimers();
+    updateTinyView();
     if (isExpanded) refreshExtraTimers();
     resizeWidget();
     startCountdown();
@@ -506,6 +543,7 @@ function startCountdown() {
     if (countdownInterval) clearInterval(countdownInterval);
     countdownInterval = setInterval(() => {
         refreshTimers();
+        updateTinyView();
         if (isExpanded) refreshExtraTimers();
     }, 1000);
 }
@@ -607,6 +645,13 @@ function updateTimer(timerElement, textElement, resetsAt, totalMinutes) {
 
 // UI State Management
 function showLoginRequired() {
+    // Force full mode for login
+    if (widgetMode === 'tiny') {
+        window.electronAPI.toggleWidgetMode().then((mode) => {
+            widgetMode = mode;
+            applyMode(mode);
+        });
+    }
     elements.loadingContainer.style.display = 'none';
     elements.loginContainer.style.display = 'flex';
     elements.noUsageContainer.style.display = 'none';
@@ -645,6 +690,92 @@ function stopAutoUpdate() {
     if (updateInterval) {
         clearInterval(updateInterval);
         updateInterval = null;
+    }
+}
+
+// ========================================
+// Widget Mode (Tiny / Full)
+// ========================================
+
+async function toggleMode() {
+    const newMode = await window.electronAPI.toggleWidgetMode();
+    widgetMode = newMode;
+    applyMode(newMode);
+}
+
+function applyMode(mode) {
+    document.body.classList.remove('mode-tiny', 'mode-full');
+    document.body.classList.add(`mode-${mode}`);
+
+    // When switching to full mode and we need login, show it
+    if (mode === 'full' && !credentials?.sessionKey) {
+        showLoginRequired();
+    }
+}
+
+function updateTinyView() {
+    if (!latestUsageData) return;
+
+    const sessionUtilization = latestUsageData.five_hour?.utilization || 0;
+    const sessionResetsAt = latestUsageData.five_hour?.resets_at;
+    const weeklyUtilization = latestUsageData.seven_day?.utilization || 0;
+
+    // Session percentage
+    const pct = Math.round(Math.min(Math.max(sessionUtilization, 0), 100));
+    elements.tinyPct.textContent = `${pct}%`;
+
+    // Session progress bar
+    elements.tinyBarFill.style.width = `${pct}%`;
+    elements.tinyBarFill.classList.remove('warning', 'danger');
+    if (pct >= dangerThreshold) {
+        elements.tinyBarFill.classList.add('danger');
+    } else if (pct >= warnThreshold) {
+        elements.tinyBarFill.classList.add('warning');
+    }
+
+    // Session remaining time
+    if (sessionResetsAt) {
+        const diff = new Date(sessionResetsAt) - new Date();
+        if (diff <= 0) {
+            elements.tinyTime.textContent = '0m';
+        } else {
+            const hours = Math.floor(diff / (1000 * 60 * 60));
+            const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+            if (hours >= 24) {
+                const days = Math.floor(hours / 24);
+                const rh = hours % 24;
+                elements.tinyTime.textContent = `${days}d${rh}h`;
+            } else if (hours > 0) {
+                elements.tinyTime.textContent = `${hours}h${minutes}m`;
+            } else {
+                elements.tinyTime.textContent = `${minutes}m`;
+            }
+        }
+    } else {
+        elements.tinyTime.textContent = '--:--';
+    }
+
+    // Weekly circle
+    const weeklyPct = Math.min(Math.max(weeklyUtilization, 0), 100);
+    const weeklyResetsAt = latestUsageData.seven_day?.resets_at;
+    const totalMs = 7 * 24 * 60 * 60 * 1000;
+
+    if (weeklyResetsAt) {
+        const diff = new Date(weeklyResetsAt) - new Date();
+        const elapsedMs = totalMs - Math.max(diff, 0);
+        const elapsedPct = (elapsedMs / totalMs) * 100;
+        const circumference = 63;
+        const offset = circumference - (elapsedPct / 100) * circumference;
+        elements.tinyWeeklyCircle.style.strokeDashoffset = offset;
+
+        elements.tinyWeeklyCircle.classList.remove('warning', 'danger');
+        if (elapsedPct >= 90) {
+            elements.tinyWeeklyCircle.classList.add('danger');
+        } else if (elapsedPct >= 75) {
+            elements.tinyWeeklyCircle.classList.add('warning');
+        }
+    } else {
+        elements.tinyWeeklyCircle.style.strokeDashoffset = 63;
     }
 }
 

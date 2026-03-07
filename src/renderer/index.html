@@ -5,15 +5,34 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Claude Usage Widget</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Libre+Baskerville:wght@400;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
 </head>
 
 <body>
     <div id="app">
         <div class="widget-container" id="widgetContainer">
+            <!-- Tiny View (default mode) -->
+            <div class="tiny-view" id="tinyView">
+                <span class="tiny-pct" id="tinyPct">0%</span>
+                <div class="tiny-bar">
+                    <div class="tiny-bar-fill" id="tinyBarFill" style="width: 0%"></div>
+                </div>
+                <span class="tiny-time" id="tinyTime">--:--</span>
+                <div class="tiny-weekly">
+                    <svg class="tiny-weekly-svg" width="20" height="20" viewBox="0 0 24 24">
+                        <circle class="tiny-wk-bg" cx="12" cy="12" r="10"/>
+                        <circle class="tiny-wk-progress" id="tinyWeeklyCircle" cx="12" cy="12" r="10"
+                            style="stroke-dasharray: 63; stroke-dashoffset: 63"/>
+                    </svg>
+                    <span class="tiny-w-label">W</span>
+                </div>
+                <button class="tiny-expand-btn" id="tinyExpandBtn" title="Expand">
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+                        <polyline points="6 15 12 9 18 15"/>
+                    </svg>
+                </button>
+            </div>
+
             <!-- Title Bar -->
             <div class="title-bar" id="titleBar">
                 <div class="title">
@@ -21,6 +40,11 @@
                     <span>Claude Usage</span>
                 </div>
                 <div class="controls">
+                    <button class="control-btn collapse-btn" id="collapseBtn" title="Collapse to tiny">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="6 9 12 15 18 9"/>
+                        </svg>
+                    </button>
                     <button class="control-btn settings-btn" id="settingsBtn" title="Settings">⚙️</button>
                     <button class="control-btn refresh-btn" id="refreshBtn" title="Refresh">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -237,17 +261,6 @@
 
                     <div class="settings-footer">
                         <button class="logout-btn" id="logoutBtn">Log Out</button>
-                        <button class="coffee-btn" id="coffeeBtn">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                <path d="M17 8h1a4 4 0 1 1 0 8h-1" />
-                                <path d="M3 8h14v9a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4Z" />
-                                <line x1="6" y1="2" x2="6" y2="4" />
-                                <line x1="10" y1="2" x2="10" y2="4" />
-                                <line x1="14" y1="2" x2="14" y2="4" />
-                            </svg>
-                            Buy me a coffee
-                        </button>
                     </div>
                 </div>
             </div>

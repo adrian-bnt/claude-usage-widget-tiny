@@ -24,6 +24,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onSessionExpired: (callback) => {
     ipcRenderer.on('session-expired', () => callback());
   },
+  onModeChanged: (callback) => {
+    ipcRenderer.on('mode-changed', (_, mode) => callback(mode));
+  },
+  onOpenSettings: (callback) => {
+    ipcRenderer.on('open-settings', () => callback());
+  },
 
   // API
   fetchUsageData: () => ipcRenderer.invoke('fetch-usage-data'),
@@ -31,6 +37,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Platform
   platform: process.platform,
+
+  // Widget mode
+  toggleWidgetMode: () => ipcRenderer.invoke('toggle-widget-mode'),
+  getWidgetMode: () => ipcRenderer.invoke('get-widget-mode'),
+  showTinyContextMenu: () => ipcRenderer.send('show-tiny-context-menu'),
 
   // Settings
   getSettings: () => ipcRenderer.invoke('get-settings'),
