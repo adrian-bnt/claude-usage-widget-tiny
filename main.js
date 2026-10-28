@@ -14,7 +14,15 @@ function debugLog(...args) {
   if (DEBUG) console.log('[Debug]', ...args);
 }
 
-const CHROME_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+// Plain Chrome User-Agent for this OS, so Claude.ai sees a normal browser
+// whose platform matches the machine (a Windows UA on a Mac looks odd).
+function chromeUserAgent() {
+  const chrome = process.versions.chrome;
+  if (process.platform === 'darwin') {
+    return `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chrome} Safari/537.36`;
+  }
+  return `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chrome} Safari/537.36`;
+}
 
 let mainWindow = null;
 let tray = null;
@@ -26,7 +34,7 @@ const TINY_HEIGHT = 38;
 
 // Set session-level User-Agent to avoid Electron detection
 app.on('ready', () => {
-  session.defaultSession.setUserAgent(CHROME_USER_AGENT);
+  session.defaultSession.setUserAgent(chromeUserAgent());
 });
 
 // Set sessionKey as a cookie in Electron's session
@@ -51,13 +59,14 @@ function createMainWindow() {
   // Default position: bottom-right of primary display
   let defaultX, defaultY;
   const primaryDisplay = screen.getPrimaryDisplay();
-  const { width: screenW, height: screenH } = primaryDisplay.workAreaSize;
+  // Use the work area origin too: on macOS it starts below the menu bar.
+  const { x: areaX, y: areaY, width: screenW, height: screenH } = primaryDisplay.workArea;
   if (isTiny) {
-    defaultX = screenW - TINY_WIDTH - 20;
-    defaultY = screenH - TINY_HEIGHT - 60;
+    defaultX = areaX + screenW - TINY_WIDTH - 20;
+    defaultY = areaY + screenH - TINY_HEIGHT - 60;
   } else {
-    defaultX = screenW - WIDGET_WIDTH - 20;
-    defaultY = screenH - WIDGET_HEIGHT - 60;
+    defaultX = areaX + screenW - WIDGET_WIDTH - 20;
+    defaultY = areaY + screenH - WIDGET_HEIGHT - 60;
   }
 
   const windowOptions = {
@@ -68,7 +77,8 @@ function createMainWindow() {
     alwaysOnTop: true,
     resizable: false,
     skipTaskbar: false,
-    icon: path.join(__dirname, process.platform === 'darwin' ? 'assets/icon.icns' : 'assets/icon.ico'),
+    // macOS takes the Dock icon from the app bundle (set below for dev runs).
+    ...(process.platform !== 'darwin' && { icon: path.join(__dirname, 'assets/icon.ico') }),
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -78,7 +88,7 @@ function createMainWindow() {
 
   // Use saved position, but reset if it's too close to the bottom edge
   // (fixes overlap from previous 20px offset)
-  if (savedPosition && savedPosition.y < screenH - 80) {
+  if (savedPosition && savedPosition.y < areaY + screenH - 80) {
     windowOptions.x = savedPosition.x;
     windowOptions.y = savedPosition.y;
   } else {
@@ -89,6 +99,11 @@ function createMainWindow() {
 
   mainWindow = new BrowserWindow(windowOptions);
   mainWindow.loadFile('src/renderer/index.html');
+
+  // macOS: keep the widget on every Space, including over full-screen apps.
+  if (process.platform === 'darwin') {
+    mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  }
 
   mainWindow.on('move', () => {
     const bounds = mainWindow.getBounds();
@@ -570,6 +585,11 @@ app.whenReady().then(async () => {
   const sessionKey = store.get('sessionKey');
   if (sessionKey) {
     await setSessionCookie(sessionKey);
+  }
+
+  // Unpackaged runs (npm start) on macOS would show the default Electron icon.
+  if (process.platform === 'darwin' && !app.isPackaged && app.dock) {
+    app.dock.setIcon(path.join(__dirname, 'assets/logo.png'));
   }
 
   createMainWindow();
